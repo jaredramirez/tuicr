@@ -2,7 +2,7 @@
 //!
 //! Provides dark and light themes with automatic terminal background detection.
 
-use std::sync::OnceLock;
+use std::{process::Command, sync::OnceLock};
 
 use ratatui::style::Color;
 use two_face::theme::EmbeddedThemeName;
@@ -746,6 +746,7 @@ const THEME_CHOICES: [(&str, ThemeArg); 10] = [
 #[derive(Debug, Clone, Default)]
 pub struct CliArgs {
     pub theme: Option<ThemeArg>,
+    pub appearance: Option<AppearanceArg>,
     /// Output to stdout instead of clipboard when exporting
     pub output_to_stdout: bool,
     /// Skip checking for updates on startup
@@ -753,6 +754,19 @@ pub struct CliArgs {
     /// Commit/revision range to review
     pub revisions: Option<String>,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AppearanceArg {
+    Light,
+    Dark,
+    System,
+}
+
+const APPEARANCE_CHOICES: [(&str, AppearanceArg); 3] = [
+    ("light", AppearanceArg::Light),
+    ("dark", AppearanceArg::Dark),
+    ("system", AppearanceArg::System),
+];
 
 impl ThemeArg {
     fn choices() -> &'static [(&'static str, ThemeArg)] {
@@ -764,6 +778,31 @@ impl ThemeArg {
         Self::choices().iter().find_map(|(name, theme)| {
             if *name == normalized {
                 Some(*theme)
+            } else {
+                None
+            }
+        })
+    }
+
+    fn valid_values_display() -> String {
+        Self::choices()
+            .iter()
+            .map(|(name, _)| *name)
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
+impl AppearanceArg {
+    fn choices() -> &'static [(&'static str, AppearanceArg)] {
+        &APPEARANCE_CHOICES
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        let normalized = s.trim().to_ascii_lowercase();
+        Self::choices().iter().find_map(|(name, appearance)| {
+            if *name == normalized {
+                Some(*appearance)
             } else {
                 None
             }
@@ -795,36 +834,227 @@ pub fn resolve_theme(arg: ThemeArg) -> Theme {
     }
 }
 
+fn resolve_appearance(appearance: AppearanceArg) -> ThemeArg {
+    match appearance {
+        AppearanceArg::Light => ThemeArg::Light,
+        AppearanceArg::Dark => ThemeArg::Dark,
+        AppearanceArg::System => {
+            if is_system_dark_mode().unwrap_or(true) {
+                ThemeArg::Dark
+            } else {
+                ThemeArg::Light
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn is_system_dark_mode() -> Option<bool> {
+    let output = Command::new("defaults")
+        .args(["read", "-g", "AppleInterfaceStyle"])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return Some(false);
+    }
+
+    let value = String::from_utf8_lossy(&output.stdout);
+    Some(value.trim().eq_ignore_ascii_case("dark"))
+}
+
+#[cfg(target_os = "windows")]
+fn is_system_dark_mode() -> Option<bool> {
+    let output = Command::new("reg")
+        .args([
+            "query",
+            r"HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+            "/v",
+            "AppsUseLightTheme",
+        ])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let value = String::from_utf8_lossy(&output.stdout);
+    if value.contains("0x0") {
+        Some(true)
+    } else if value.contains("0x1") {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+fn is_system_dark_mode() -> Option<bool> {
+    let color_scheme = Command::new("gsettings")
+        .args(["get", "org.gnome.desktop.interface", "color-scheme"])
+        .output()
+        .ok();
+    if let Some(output) = color_scheme
+        && output.status.success()
+    {
+        let value = String::from_utf8_lossy(&output.stdout);
+        if value.contains("prefer-dark") {
+            return Some(true);
+        }
+        if value.contains("default") || value.contains("prefer-light") {
+            return Some(false);
+        }
+    }
+
+    let gtk_theme = Command::new("gsettings")
+        .args(["get", "org.gnome.desktop.interface", "gtk-theme"])
+        .output()
+        .ok();
+    if let Some(output) = gtk_theme
+        && output.status.success()
+    {
+        let value = String::from_utf8_lossy(&output.stdout);
+        if value.to_ascii_lowercase().contains("dark") {
+            return Some(true);
+        }
+        return Some(false);
+    }
+
+    None
+}
+
 pub fn resolve_theme_arg_with_config(
     cli_theme: Option<ThemeArg>,
     config_theme: Option<&str>,
-) -> (ThemeArg, Vec<String>) {
+) -> (Option<ThemeArg>, Vec<String>) {
     let mut warnings = Vec::new();
 
     if let Some(theme) = cli_theme {
-        return (theme, warnings);
+        return (Some(theme), warnings);
     }
 
     if let Some(config_theme) = config_theme {
         if let Some(theme) = ThemeArg::from_str(config_theme) {
-            return (theme, warnings);
+            return (Some(theme), warnings);
         }
 
         let valid_values = ThemeArg::valid_values_display();
         warnings.push(format!(
-            "Warning: Unknown theme '{config_theme}' in config, using dark. Valid options: {valid_values}"
+            "Warning: Unknown theme '{config_theme}' in config, using appearance mode. Valid options: {valid_values}"
         ));
     }
 
-    (ThemeArg::Dark, warnings)
+    (None, warnings)
+}
+
+pub fn resolve_appearance_arg_with_config(
+    cli_appearance: Option<AppearanceArg>,
+    config_appearance: Option<&str>,
+) -> (AppearanceArg, Vec<String>) {
+    let mut warnings = Vec::new();
+
+    if let Some(appearance) = cli_appearance {
+        return (appearance, warnings);
+    }
+
+    if let Some(config_appearance) = config_appearance {
+        if let Some(appearance) = AppearanceArg::from_str(config_appearance) {
+            return (appearance, warnings);
+        }
+
+        let valid_values = AppearanceArg::valid_values_display();
+        warnings.push(format!(
+            "Warning: Unknown appearance '{config_appearance}' in config, using system. Valid options: {valid_values}"
+        ));
+    }
+
+    (AppearanceArg::System, warnings)
+}
+
+fn parse_theme_variant_from_config(
+    key: &str,
+    value: Option<&str>,
+) -> (Option<ThemeArg>, Vec<String>) {
+    let mut warnings = Vec::new();
+    let Some(value) = value else {
+        return (None, warnings);
+    };
+
+    if let Some(theme) = ThemeArg::from_str(value) {
+        return (Some(theme), warnings);
+    }
+
+    let valid_values = ThemeArg::valid_values_display();
+    warnings.push(format!(
+        "Warning: Unknown theme '{value}' in config key '{key}', ignoring. Valid options: {valid_values}"
+    ));
+    (None, warnings)
 }
 
 pub fn resolve_theme_with_config(
     cli_theme: Option<ThemeArg>,
+    cli_appearance: Option<AppearanceArg>,
     config_theme: Option<&str>,
+    config_theme_dark: Option<&str>,
+    config_theme_light: Option<&str>,
+    config_appearance: Option<&str>,
 ) -> (Theme, Vec<String>) {
-    let (theme_arg, warnings) = resolve_theme_arg_with_config(cli_theme, config_theme);
-    (resolve_theme(theme_arg), warnings)
+    let (theme_arg, mut warnings) = resolve_theme_arg_with_config(cli_theme, config_theme);
+    let (appearance_arg, appearance_warnings) =
+        resolve_appearance_arg_with_config(cli_appearance, config_appearance);
+    warnings.extend(appearance_warnings);
+    let (theme_dark_arg, dark_warnings) =
+        parse_theme_variant_from_config("theme_dark", config_theme_dark);
+    warnings.extend(dark_warnings);
+    let (theme_light_arg, light_warnings) =
+        parse_theme_variant_from_config("theme_light", config_theme_light);
+    warnings.extend(light_warnings);
+
+    if let Some(theme_arg) = theme_arg {
+        if cli_appearance.is_some() || config_appearance.is_some() {
+            warnings.push(
+                "Warning: Appearance setting is ignored when theme is explicitly set".to_string(),
+            );
+        }
+        (resolve_theme(theme_arg), warnings)
+    } else {
+        match (theme_dark_arg, theme_light_arg) {
+            (Some(theme_dark), Some(theme_light)) => {
+                let resolved = match appearance_arg {
+                    AppearanceArg::Dark => theme_dark,
+                    AppearanceArg::Light => theme_light,
+                    AppearanceArg::System => {
+                        if is_system_dark_mode().unwrap_or(true) {
+                            theme_dark
+                        } else {
+                            theme_light
+                        }
+                    }
+                };
+                (resolve_theme(resolved), warnings)
+            }
+            (Some(theme_dark), None) => {
+                if cli_appearance.is_some() || config_appearance.is_some() {
+                    warnings.push(
+                        "Warning: Appearance setting is ignored when only theme_dark is configured"
+                            .to_string(),
+                    );
+                }
+                (resolve_theme(theme_dark), warnings)
+            }
+            (None, Some(theme_light)) => {
+                if cli_appearance.is_some() || config_appearance.is_some() {
+                    warnings.push(
+                        "Warning: Appearance setting is ignored when only theme_light is configured"
+                            .to_string(),
+                    );
+                }
+                (resolve_theme(theme_light), warnings)
+            }
+            (None, None) => (resolve_theme(resolve_appearance(appearance_arg)), warnings),
+        }
+    }
 }
 
 impl Theme {
@@ -847,6 +1077,7 @@ fn print_help() -> ! {
         })
         .unwrap_or_else(|| "tuicr".to_string());
     let valid_values = ThemeArg::valid_values_display();
+    let appearance_values = AppearanceArg::valid_values_display();
     let config_path = config_path_hint();
     println!(
         "tuicr - Review AI-generated diffs like a GitHub pull request
@@ -855,9 +1086,12 @@ Usage: {name} [OPTIONS]
 
 Options:
   -r, --revisions <REVSET>  Commit range/Revset to review (syntax depends on VCS backend)
-  --theme <THEME>        Color theme to use [default: dark]
-                         Valid values: {valid_values}
-                         Precedence: --theme > {config_path} > dark
+  --theme <THEME>        Color theme to use
+                          Valid values: {valid_values}
+  --appearance <MODE>    Appearance mode for default theme
+                         Valid values: {appearance_values}
+                         Used when no explicit theme is set
+                         Precedence: --appearance > {config_path} > system
   --stdout               Output to stdout instead of clipboard when exporting
   --no-update-check      Skip checking for updates on startup
   -h, --help             Print this help message
@@ -923,6 +1157,38 @@ fn parse_cli_args_from(args: &[String]) -> Result<CliArgs, String> {
 
             cli_args.theme = ThemeArg::from_str(value)
                 .ok_or_else(|| format!("Unknown theme '{value}'. Valid options: {valid_values}"))
+                .map(Some)?;
+        }
+
+        // Handle --appearance value
+        if args[i] == "--appearance" {
+            let valid_values = AppearanceArg::valid_values_display();
+            let value = args
+                .get(i + 1)
+                .ok_or_else(|| format!("--appearance requires a value ({valid_values})"))?;
+
+            if value.starts_with('-') {
+                return Err(format!("--appearance requires a value ({valid_values})"));
+            }
+
+            cli_args.appearance = AppearanceArg::from_str(value)
+                .ok_or_else(|| {
+                    format!("Unknown appearance '{value}'. Valid options: {valid_values}")
+                })
+                .map(Some)?;
+        }
+
+        // Handle --appearance=value
+        if let Some(value) = args[i].strip_prefix("--appearance=") {
+            let valid_values = AppearanceArg::valid_values_display();
+            if value.is_empty() {
+                return Err(format!("--appearance requires a value ({valid_values})"));
+            }
+
+            cli_args.appearance = AppearanceArg::from_str(value)
+                .ok_or_else(|| {
+                    format!("Unknown appearance '{value}'. Valid options: {valid_values}")
+                })
                 .map(Some)?;
         }
 
@@ -1020,6 +1286,20 @@ mod tests {
     }
 
     #[test]
+    fn should_parse_appearance_when_provided() {
+        let parsed =
+            parse_for_test(&["tuicr", "--appearance", "system"]).expect("parse should succeed");
+        assert_eq!(parsed.appearance, Some(AppearanceArg::System));
+    }
+
+    #[test]
+    fn should_error_for_invalid_appearance() {
+        let err =
+            parse_for_test(&["tuicr", "--appearance", "nope"]).expect_err("parse should fail");
+        assert!(err.contains("Unknown appearance 'nope'"));
+    }
+
+    #[test]
     fn should_roundtrip_all_canonical_theme_values() {
         for (name, expected_theme) in ThemeArg::choices() {
             assert_eq!(ThemeArg::from_str(name), Some(*expected_theme));
@@ -1038,37 +1318,81 @@ mod tests {
     fn should_use_cli_theme_over_config_theme() {
         let (resolved, warnings) =
             resolve_theme_arg_with_config(Some(ThemeArg::Light), Some("dark"));
-        assert_eq!(resolved, ThemeArg::Light);
+        assert_eq!(resolved, Some(ThemeArg::Light));
         assert!(warnings.is_empty());
     }
 
     #[test]
     fn should_use_config_theme_when_cli_missing() {
         let (resolved, warnings) = resolve_theme_arg_with_config(None, Some("light"));
-        assert_eq!(resolved, ThemeArg::Light);
+        assert_eq!(resolved, Some(ThemeArg::Light));
         assert!(warnings.is_empty());
     }
 
     #[test]
-    fn should_fallback_to_dark_and_warn_for_invalid_config_theme() {
+    fn should_fallback_to_appearance_and_warn_for_invalid_config_theme() {
         let (resolved, warnings) = resolve_theme_arg_with_config(None, Some("unknown"));
-        assert_eq!(resolved, ThemeArg::Dark);
+        assert_eq!(resolved, None);
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("Unknown theme 'unknown'"));
     }
 
     #[test]
-    fn should_fallback_to_dark_when_no_theme_is_set() {
+    fn should_fallback_to_appearance_when_no_theme_is_set() {
         let (resolved, warnings) = resolve_theme_arg_with_config(None, None);
-        assert_eq!(resolved, ThemeArg::Dark);
+        assert_eq!(resolved, None);
         assert!(warnings.is_empty());
     }
 
     #[test]
     fn should_use_catppuccin_theme_from_config_when_cli_missing() {
         let (resolved, warnings) = resolve_theme_arg_with_config(None, Some("catppuccin-fRappe"));
-        assert_eq!(resolved, ThemeArg::CatppuccinFrappe);
+        assert_eq!(resolved, Some(ThemeArg::CatppuccinFrappe));
         assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn should_default_to_system_appearance_when_not_set() {
+        let (resolved, warnings) = resolve_appearance_arg_with_config(None, None);
+        assert_eq!(resolved, AppearanceArg::System);
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn should_use_appearance_when_theme_is_not_set() {
+        let (resolved, warnings) =
+            resolve_theme_with_config(None, Some(AppearanceArg::Light), None, None, None, None);
+        assert_eq!(resolved.syntect_theme, EmbeddedThemeName::Base16OceanLight);
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn should_select_variant_theme_by_appearance_when_both_variants_configured() {
+        let (resolved, warnings) = resolve_theme_with_config(
+            None,
+            Some(AppearanceArg::Light),
+            None,
+            Some("gruvbox-dark"),
+            Some("gruvbox-light"),
+            None,
+        );
+        assert_eq!(resolved.syntect_theme, EmbeddedThemeName::GruvboxLight);
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn should_ignore_appearance_when_only_dark_variant_configured() {
+        let (resolved, warnings) = resolve_theme_with_config(
+            None,
+            Some(AppearanceArg::Light),
+            None,
+            Some("gruvbox-dark"),
+            None,
+            None,
+        );
+        assert_eq!(resolved.syntect_theme, EmbeddedThemeName::GruvboxDark);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("only theme_dark is configured"));
     }
 
     #[test]

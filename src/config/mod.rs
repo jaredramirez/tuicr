@@ -10,6 +10,9 @@ use toml::Value;
 #[serde(default)]
 pub struct AppConfig {
     pub theme: Option<String>,
+    pub theme_dark: Option<String>,
+    pub theme_light: Option<String>,
+    pub appearance: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -93,8 +96,38 @@ fn load_config_from_path(path: &Path) -> Result<ConfigLoadOutcome> {
         }
     }
 
+    if let Some(theme_dark) = table.get("theme_dark") {
+        if let Some(theme_dark_str) = theme_dark.as_str() {
+            config.theme_dark = Some(theme_dark_str.to_string());
+        } else {
+            warnings.push(
+                "Warning: Config key 'theme_dark' must be a string; ignoring value".to_string(),
+            );
+        }
+    }
+
+    if let Some(theme_light) = table.get("theme_light") {
+        if let Some(theme_light_str) = theme_light.as_str() {
+            config.theme_light = Some(theme_light_str.to_string());
+        } else {
+            warnings.push(
+                "Warning: Config key 'theme_light' must be a string; ignoring value".to_string(),
+            );
+        }
+    }
+
+    if let Some(appearance) = table.get("appearance") {
+        if let Some(appearance_str) = appearance.as_str() {
+            config.appearance = Some(appearance_str.to_string());
+        } else {
+            warnings.push(
+                "Warning: Config key 'appearance' must be a string; ignoring value".to_string(),
+            );
+        }
+    }
+
     for key in table.keys() {
-        if key != "theme" {
+        if key != "theme" && key != "theme_dark" && key != "theme_light" && key != "appearance" {
             warnings.push(format!("Warning: Unknown config key '{key}', ignoring"));
         }
     }
@@ -129,6 +162,41 @@ mod tests {
         assert_eq!(
             outcome.config.as_ref().and_then(|cfg| cfg.theme.as_deref()),
             Some("light")
+        );
+        assert!(outcome.warnings.is_empty());
+    }
+
+    #[test]
+    fn should_load_theme_variants_and_appearance_from_valid_toml() {
+        let dir = tempdir().expect("failed to create temp dir");
+        let path = dir.path().join("config.toml");
+        fs::write(
+            &path,
+            "theme_dark = \"gruvbox-dark\"\ntheme_light = \"gruvbox-light\"\nappearance = \"system\"\n",
+        )
+        .expect("failed to write config");
+
+        let outcome = load_config_from_path(&path).expect("valid config should parse");
+        assert_eq!(
+            outcome
+                .config
+                .as_ref()
+                .and_then(|cfg| cfg.theme_dark.as_deref()),
+            Some("gruvbox-dark")
+        );
+        assert_eq!(
+            outcome
+                .config
+                .as_ref()
+                .and_then(|cfg| cfg.theme_light.as_deref()),
+            Some("gruvbox-light")
+        );
+        assert_eq!(
+            outcome
+                .config
+                .as_ref()
+                .and_then(|cfg| cfg.appearance.as_deref()),
+            Some("system")
         );
         assert!(outcome.warnings.is_empty());
     }
@@ -199,6 +267,21 @@ mod tests {
         assert_eq!(
             outcome.warnings[0],
             "Warning: Config key 'theme' must be a string; ignoring value"
+        );
+    }
+
+    #[test]
+    fn should_warn_and_ignore_theme_dark_with_invalid_type() {
+        let dir = tempdir().expect("failed to create temp dir");
+        let path = dir.path().join("config.toml");
+        fs::write(&path, "theme_dark = 123\n").expect("failed to write config");
+
+        let outcome = load_config_from_path(&path).expect("config should parse");
+        assert_eq!(outcome.config, Some(AppConfig::default()));
+        assert_eq!(outcome.warnings.len(), 1);
+        assert_eq!(
+            outcome.warnings[0],
+            "Warning: Config key 'theme_dark' must be a string; ignoring value"
         );
     }
 

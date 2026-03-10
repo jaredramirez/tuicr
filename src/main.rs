@@ -73,10 +73,23 @@ fn main() -> anyhow::Result<()> {
     startup_warnings.extend(config_outcome.warnings);
     let (theme, theme_warnings) = resolve_theme_with_config(
         cli_args.theme,
+        cli_args.appearance,
         config_outcome
             .config
             .as_ref()
             .and_then(|cfg| cfg.theme.as_deref()),
+        config_outcome
+            .config
+            .as_ref()
+            .and_then(|cfg| cfg.theme_dark.as_deref()),
+        config_outcome
+            .config
+            .as_ref()
+            .and_then(|cfg| cfg.theme_light.as_deref()),
+        config_outcome
+            .config
+            .as_ref()
+            .and_then(|cfg| cfg.appearance.as_deref()),
     );
     startup_warnings.extend(theme_warnings);
 

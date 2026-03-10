@@ -103,6 +103,7 @@ Detection order: Jujutsu → Git → Mercurial. Jujutsu is tried first because j
 |------|-------------|
 | `-r` / `--revisions <REVSET>` | Commit range/Revision set to review. Exact syntax depends on VCS backend (Git, JJ, Hg) |
 | `--theme <THEME>` | Color theme override (`dark`, `light`, `ayu-light`, `onedark`, `catppuccin-latte`, `catppuccin-frappe`, `catppuccin-macchiato`, `catppuccin-mocha`, `gruvbox-dark`, `gruvbox-light`) |
+| `--appearance <MODE>` | Appearance mode for default theme (`dark`, `light`, `system`) |
 | `--stdout` | Output to stdout instead of clipboard when exporting |
 | `--no-update-check` | Skip checking for updates on startup |
 
@@ -117,16 +118,24 @@ Set a default theme in:
 - Linux/macOS: `$XDG_CONFIG_HOME/tuicr/config.toml` (default: `~/.config/tuicr/config.toml`)
 - Windows: `%APPDATA%\tuicr\config.toml`
 
-Example:
+Examples:
 
 ```toml
 theme = "catppuccin-mocha"
+
+appearance = "system"
+theme_dark = "gruvbox-dark"
+theme_light = "gruvbox-light"
 ```
 
 Theme resolution precedence:
 1. `--theme <THEME>`
-2. Config file path above (OS-specific)
-3. built-in default (`dark`)
+2. `theme` in config file path above (OS-specific)
+3. `theme_dark` + `theme_light` in config (selected by appearance)
+4. `theme_dark` only or `theme_light` only in config (appearance ignored)
+5. `--appearance <MODE>` (only when no explicit theme or variants are set)
+6. `appearance` in config (only when no explicit theme or variants are set)
+7. built-in default (`system`)
 
 Notes:
 - Invalid `--theme` values cause an immediate non-zero exit.

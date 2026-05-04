@@ -5,3 +5,5 @@
 /.codex/
 /.agents/
 /.opencode/
+.DS_Store
+**/.DS_Store

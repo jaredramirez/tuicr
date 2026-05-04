@@ -198,6 +198,9 @@ fn main() -> anyhow::Result<()> {
         if cfg.export_legend == Some(false) {
             app.export_legend = false;
         }
+        if cfg.cursor_line == Some(false) {
+            app.cursor_line_highlight = false;
+        }
     }
 
     // On narrow terminals, start with only the diff panel visible.

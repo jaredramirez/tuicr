@@ -405,6 +405,13 @@ pub fn render_help(frame: &mut Frame, app: &mut App) {
         ]),
         Line::from(vec![
             Span::styled(
+                "  :stage    ",
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("Stage reviewed files"),
+        ]),
+        Line::from(vec![
+            Span::styled(
                 "  :diff     ",
                 Style::default().add_modifier(Modifier::BOLD),
             ),

@@ -533,6 +533,87 @@ impl Theme {
         }
     }
 
+    /// Ayu Mirage — the dark variant of the Ayu palette
+    /// (<https://ayutheme.com/>). Hex values are the resolved outputs
+    /// of the official `ayu-colors` palette generator, matching the
+    /// upstream `vscode-ayu` extension.
+    pub fn ayu_mirage() -> Self {
+        let bg = Color::Rgb(31, 36, 48); // #1f2430 surface.base / ui.bg
+        let bg_dark = Color::Rgb(26, 31, 41); // #1a1f29 editor.line
+        let bg_panel = Color::Rgb(40, 46, 59); // #282e3b ui.panel.bg
+        let selection = Color::Rgb(41, 48, 64); // #293040 ui.selection.active on bg
+        let fg = Color::Rgb(204, 202, 194); // #cccac2 editor.fg
+        let fg_secondary = Color::Rgb(154, 162, 175);
+        let comment = Color::Rgb(110, 124, 143); // #6e7c8f syntax.comment
+        let dim = Color::Rgb(112, 122, 140); // #707a8c ui.fg
+
+        let yellow = Color::Rgb(255, 205, 102); // #ffcd66 syntax.func
+        let orange = Color::Rgb(255, 166, 89); // #ffa659 syntax.keyword
+        let green = Color::Rgb(135, 217, 108); // #87d96c vcs.added
+        let red = Color::Rgb(242, 121, 131); // #f27983 vcs.removed
+        let cyan = Color::Rgb(92, 207, 230); // #5ccfe6 syntax.tag
+        let blue = Color::Rgb(115, 208, 255); // #73d0ff syntax.entity
+        let purple = Color::Rgb(223, 191, 255); // #dfbfff syntax.constant
+        let mint = Color::Rgb(149, 230, 203); // #95e6cb syntax.regexp
+
+        Self {
+            highlighter: OnceLock::new(),
+
+            panel_bg: bg,
+            bg_highlight: selection,
+            fg_primary: fg,
+            fg_secondary,
+            fg_dim: comment,
+
+            diff_add: green,
+            diff_add_bg: Color::Rgb(35, 53, 41),
+            diff_del: red,
+            diff_del_bg: Color::Rgb(58, 36, 41),
+            diff_context: fg,
+            diff_hunk_header: blue,
+            expanded_context_fg: dim,
+
+            syntax_add_bg: Color::Rgb(30, 47, 36),
+            syntax_del_bg: Color::Rgb(50, 30, 35),
+
+            // Closest embedded base16 dark to the Ayu Mirage feel.
+            syntect_theme: EmbeddedThemeName::Base16EightiesDark,
+
+            file_added: green,
+            file_modified: yellow,
+            file_deleted: red,
+            file_renamed: purple,
+
+            reviewed: green,
+            pending: yellow,
+
+            comment_note: blue,
+            comment_suggestion: mint,
+            comment_issue: red,
+            comment_praise: green,
+
+            border_focused: orange,
+            border_unfocused: Color::Rgb(63, 70, 84),
+            status_bar_bg: bg_dark,
+            cursor_color: orange,
+            cursor_line_bg: bg_panel,
+            branch_name: cyan,
+            help_indicator: comment,
+
+            message_info_fg: bg_dark,
+            message_info_bg: blue,
+            message_warning_fg: bg_dark,
+            message_warning_bg: yellow,
+            message_error_fg: fg,
+            message_error_bg: red,
+            update_badge_fg: bg_dark,
+            update_badge_bg: yellow,
+
+            mode_fg: bg_dark,
+            mode_bg: orange,
+        }
+    }
+
     pub fn onedark() -> Self {
         Self {
             highlighter: OnceLock::new(),
@@ -1229,6 +1310,7 @@ pub enum ThemeArg {
     Dark,
     Light,
     AyuLight,
+    AyuMirage,
     Onedark,
     GithubLight,
     GithubDark,
@@ -1247,10 +1329,11 @@ pub enum ThemeArg {
     TokyoNightStorm,
 }
 
-const THEME_CHOICES: [(&str, ThemeArg); 19] = [
+const THEME_CHOICES: [(&str, ThemeArg); 20] = [
     ("dark", ThemeArg::Dark),
     ("light", ThemeArg::Light),
     ("ayu-light", ThemeArg::AyuLight),
+    ("ayu-mirage", ThemeArg::AyuMirage),
     ("onedark", ThemeArg::Onedark),
     ("github-light", ThemeArg::GithubLight),
     ("github-dark", ThemeArg::GithubDark),
@@ -1357,6 +1440,7 @@ pub fn resolve_theme(arg: ThemeArg) -> Theme {
         ThemeArg::Dark => Theme::dark(),
         ThemeArg::Light => Theme::light(),
         ThemeArg::AyuLight => Theme::ayu_light(),
+        ThemeArg::AyuMirage => Theme::ayu_mirage(),
         ThemeArg::Onedark => Theme::onedark(),
         ThemeArg::GithubLight => Theme::github_light(),
         ThemeArg::GithubDark => Theme::github_dark(),

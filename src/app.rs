@@ -318,6 +318,98 @@ pub enum InputMode {
     Confirm,
     CommitSelect,
     VisualSelect,
+    FilePicker,
+}
+
+/// State for the fuzzy file picker overlay (Helix-style `space f`).
+///
+/// The haystack is a snapshot of the current diff's files, captured when the
+/// picker opens. Each entry of `matches` is an index back into `haystack`
+/// (which corresponds 1:1 with `App::diff_files`).
+pub struct FilePickerState {
+    pub query: String,
+    pub haystack: Vec<String>,
+    /// Indices into `haystack` for currently-matching items, ordered by score desc.
+    pub matches: Vec<usize>,
+    /// Selected position within `matches`.
+    pub selected: usize,
+    /// Vertical scroll offset within `matches` (for tall lists).
+    pub scroll_offset: usize,
+    matcher: nucleo::Matcher,
+}
+
+impl std::fmt::Debug for FilePickerState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FilePickerState")
+            .field("query", &self.query)
+            .field("haystack_len", &self.haystack.len())
+            .field("matches_len", &self.matches.len())
+            .field("selected", &self.selected)
+            .finish()
+    }
+}
+
+impl FilePickerState {
+    pub fn new(haystack: Vec<String>) -> Self {
+        let matches: Vec<usize> = (0..haystack.len()).collect();
+        Self {
+            query: String::new(),
+            haystack,
+            matches,
+            selected: 0,
+            scroll_offset: 0,
+            matcher: nucleo::Matcher::new(nucleo::Config::DEFAULT),
+        }
+    }
+
+    /// Recompute `matches` after the query changed.
+    pub fn update_matches(&mut self) {
+        self.matches.clear();
+        if self.query.is_empty() {
+            self.matches.extend(0..self.haystack.len());
+        } else {
+            let pattern = nucleo::pattern::Pattern::parse(
+                &self.query,
+                nucleo::pattern::CaseMatching::Smart,
+                nucleo::pattern::Normalization::Smart,
+            );
+            let mut buf = Vec::new();
+            let mut scored: Vec<(usize, u32)> = self
+                .haystack
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, path)| {
+                    let utf = nucleo::Utf32Str::new(path, &mut buf);
+                    pattern.score(utf, &mut self.matcher).map(|s| (idx, s))
+                })
+                .collect();
+            scored.sort_by(|a, b| b.1.cmp(&a.1));
+            self.matches.extend(scored.into_iter().map(|(idx, _)| idx));
+        }
+
+        if self.matches.is_empty() {
+            self.selected = 0;
+        } else if self.selected >= self.matches.len() {
+            self.selected = self.matches.len() - 1;
+        }
+        if self.selected < self.scroll_offset {
+            self.scroll_offset = self.selected;
+        }
+    }
+
+    pub fn move_selection(&mut self, delta: isize) {
+        if self.matches.is_empty() {
+            return;
+        }
+        let len = self.matches.len() as isize;
+        let next = (self.selected as isize + delta).rem_euclid(len);
+        self.selected = next as usize;
+    }
+
+    /// Return the haystack index of the currently selected match, if any.
+    pub fn selected_haystack_idx(&self) -> Option<usize> {
+        self.matches.get(self.selected).copied()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -475,6 +567,8 @@ pub struct App {
     pub path_filter: Option<String>,
     /// Whether to include the "Comment types:" legend line in export
     pub export_legend: bool,
+    /// Fuzzy file picker overlay state (Some when `InputMode::FilePicker` is active).
+    pub file_picker: Option<FilePickerState>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1022,6 +1116,7 @@ impl App {
             saved_inline_selection: None,
             path_filter: path_filter.map(|s| s.to_string()),
             export_legend: true,
+            file_picker: None,
         };
         // Auto-hide file list when path filter matches exactly one file
         if app.path_filter.is_some() && app.diff_files.len() == 1 {
@@ -3214,6 +3309,88 @@ impl App {
     pub fn exit_search_mode(&mut self) {
         self.input_mode = InputMode::Normal;
         self.search_buffer.clear();
+    }
+
+    /// Open the fuzzy file picker over the current diff's file list.
+    /// No-op when there are no files to pick from.
+    pub fn open_file_picker(&mut self) {
+        if self.diff_files.is_empty() {
+            self.set_message("No files to pick from");
+            return;
+        }
+        let haystack: Vec<String> = self
+            .diff_files
+            .iter()
+            .map(|f| f.display_path().to_string_lossy().to_string())
+            .collect();
+        let picker = FilePickerState::new(haystack);
+        self.file_picker = Some(picker);
+        self.input_mode = InputMode::FilePicker;
+    }
+
+    pub fn close_file_picker(&mut self) {
+        self.file_picker = None;
+        self.input_mode = InputMode::Normal;
+    }
+
+    /// Append a character to the file-picker query and re-rank matches.
+    pub fn file_picker_insert_char(&mut self, c: char) {
+        if let Some(picker) = self.file_picker.as_mut() {
+            picker.query.push(c);
+            picker.update_matches();
+        }
+    }
+
+    /// Delete the last character from the file-picker query and re-rank.
+    pub fn file_picker_delete_char(&mut self) {
+        if let Some(picker) = self.file_picker.as_mut()
+            && picker.query.pop().is_some()
+        {
+            picker.update_matches();
+        }
+    }
+
+    /// Clear the entire file-picker query.
+    pub fn file_picker_clear_query(&mut self) {
+        if let Some(picker) = self.file_picker.as_mut() {
+            picker.query.clear();
+            picker.update_matches();
+        }
+    }
+
+    /// Delete the last word (space-delimited) from the file-picker query.
+    pub fn file_picker_delete_word(&mut self) {
+        if let Some(picker) = self.file_picker.as_mut() {
+            let trimmed = picker.query.trim_end();
+            let new_len = trimmed
+                .rfind(|c: char| c.is_whitespace() || c == '/' || c == '.')
+                .map(|i| i + 1)
+                .unwrap_or(0);
+            picker.query.truncate(new_len);
+            picker.update_matches();
+        }
+    }
+
+    pub fn file_picker_move(&mut self, delta: isize) {
+        if let Some(picker) = self.file_picker.as_mut() {
+            picker.move_selection(delta);
+        }
+    }
+
+    /// Confirm the picker selection: jump to the chosen file, close the
+    /// overlay, and focus the diff panel. Returns `true` if a file was
+    /// selected (vs. an empty match list).
+    pub fn file_picker_submit(&mut self) -> bool {
+        let Some(picker) = self.file_picker.as_ref() else {
+            return false;
+        };
+        let Some(idx) = picker.selected_haystack_idx() else {
+            return false;
+        };
+        self.jump_to_file(idx);
+        self.focused_panel = FocusedPanel::Diff;
+        self.close_file_picker();
+        true
     }
 
     pub fn enter_comment_mode(&mut self, file_level: bool, line: Option<(u32, LineSide)>) {
@@ -6331,5 +6508,68 @@ mod visual_selection_tests {
         let (start, end) = sel.ordered();
         assert_eq!(start, p(7, 5));
         assert_eq!(end, p(7, 20));
+    }
+}
+
+#[cfg(test)]
+mod file_picker_tests {
+    use super::*;
+
+    fn paths() -> Vec<String> {
+        vec![
+            "src/app.rs".to_string(),
+            "src/main.rs".to_string(),
+            "src/vcs/jj/mod.rs".to_string(),
+            "src/ui/file_picker.rs".to_string(),
+            "README.md".to_string(),
+        ]
+    }
+
+    #[test]
+    fn empty_query_keeps_all_matches_in_haystack_order() {
+        let mut picker = FilePickerState::new(paths());
+        assert_eq!(picker.matches.len(), 5);
+        assert_eq!(picker.matches, vec![0, 1, 2, 3, 4]);
+
+        // Type then clear; matches should restore to identity ordering.
+        picker.query.push_str("foo");
+        picker.update_matches();
+        picker.query.clear();
+        picker.update_matches();
+        assert_eq!(picker.matches, vec![0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn fuzzy_query_filters_and_ranks_matches() {
+        let mut picker = FilePickerState::new(paths());
+        picker.query.push_str("jj");
+        picker.update_matches();
+
+        assert!(!picker.matches.is_empty(), "expected matches for 'jj'");
+        let top = picker.haystack[picker.matches[0]].as_str();
+        assert!(
+            top.contains("jj"),
+            "top match should contain 'jj', got {top}"
+        );
+    }
+
+    #[test]
+    fn move_selection_wraps_around() {
+        let mut picker = FilePickerState::new(paths());
+        assert_eq!(picker.selected, 0);
+        picker.move_selection(-1);
+        assert_eq!(picker.selected, 4, "wraps backwards from 0 to last");
+        picker.move_selection(1);
+        assert_eq!(picker.selected, 0, "wraps forward from last to 0");
+    }
+
+    #[test]
+    fn no_matches_when_query_misses_everything() {
+        let mut picker = FilePickerState::new(paths());
+        picker.query.push_str("zzzqqqxxx");
+        picker.update_matches();
+        assert!(picker.matches.is_empty());
+        assert_eq!(picker.selected, 0);
+        assert!(picker.selected_haystack_idx().is_none());
     }
 }

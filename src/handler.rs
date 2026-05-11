@@ -176,7 +176,7 @@ fn handle_left_click(app: &mut App, pos: Position) {
 
 /// Export review: either to clipboard or set pending stdout output based on app.output_to_stdout.
 /// When output_to_stdout is true, stores the content and sets should_quit.
-fn handle_export(app: &mut App) {
+pub fn handle_export(app: &mut App) {
     if app.output_to_stdout {
         match generate_export_content(
             &app.session,
@@ -482,6 +482,27 @@ pub fn handle_search_action(app: &mut App, action: Action) {
     }
 }
 
+/// Handle actions in FilePicker mode (Helix-style fuzzy file picker overlay)
+pub fn handle_file_picker_action(app: &mut App, action: Action) {
+    match action {
+        Action::InsertChar(c) => app.file_picker_insert_char(c),
+        Action::DeleteChar => app.file_picker_delete_char(),
+        Action::DeleteWord => app.file_picker_delete_word(),
+        Action::ClearLine => app.file_picker_clear_query(),
+        Action::CursorUp(n) => app.file_picker_move(-(n as isize)),
+        Action::CursorDown(n) => app.file_picker_move(n as isize),
+        Action::ExitMode => app.close_file_picker(),
+        Action::SubmitInput => {
+            // file_picker_submit returns false if there is nothing to select
+            // (empty match list); in that case keep the picker open so the
+            // user can refine the query.
+            app.file_picker_submit();
+        }
+        Action::Quit => app.close_file_picker(),
+        _ => {}
+    }
+}
+
 /// Handle actions in Comment mode (text input for comments)
 pub fn handle_comment_action(app: &mut App, action: Action) {
     match action {
@@ -610,7 +631,7 @@ pub fn handle_commit_selector_action(app: &mut App, action: Action) {
         Action::CursorDown(_) => app.commit_select_down(),
         Action::CursorUp(_) => app.commit_select_up(),
         // Toggle + auto-advance so repeated presses sweep a contiguous run.
-        Action::ToggleExpand | Action::ToggleCommitSelect | Action::SelectFile => {
+        Action::ToggleCommitSelect | Action::SelectFile => {
             app.toggle_commit_selection_and_advance();
             if let Err(e) = app.reload_inline_selection() {
                 app.set_error(format!("Failed to load diff: {e}"));
@@ -672,7 +693,7 @@ pub fn handle_file_list_action(app: &mut App, action: Action) {
         Action::ScrollRight(n) => app.file_list_state.scroll_right(n),
         Action::MouseScrollDown(n) => app.file_list_viewport_scroll_down(n),
         Action::MouseScrollUp(n) => app.file_list_viewport_scroll_up(n),
-        Action::SelectFile | Action::ToggleExpand => {
+        Action::SelectFile => {
             if let Some(item) = app.get_selected_tree_item() {
                 match item {
                     FileTreeItem::Directory { path, .. } => app.toggle_directory(&path),
@@ -769,10 +790,6 @@ fn handle_shared_normal_action(app: &mut App, action: Action) {
         Action::PageUp => app.scroll_up(app.diff_state.viewport_height),
         Action::GoToTop => app.jump_to_file(0),
         Action::GoToBottom => app.jump_to_bottom(),
-        Action::NextFile => app.next_file(),
-        Action::PrevFile => app.prev_file(),
-        Action::NextHunk => app.next_hunk(),
-        Action::PrevHunk => app.prev_hunk(),
         Action::ToggleReviewed => app.toggle_reviewed(),
         Action::ToggleFocus => {
             let has_selector = app.has_inline_commit_selector();

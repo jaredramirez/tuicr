@@ -2,6 +2,37 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased] — fork: jj-native + Helix-style keybinds
+
+### Breaking Changes
+
+- **Keybindings reworked toward Helix conventions.** Vim-style single-key
+  actions and `;`-chords were replaced by chord prefixes (`g`, `space`, `[`,
+  `]`). Specifically:
+  - `g` → top is now `gg`; `G` → bottom is now `ge`
+  - `{` / `}` (prev/next file) → `[f` / `]f`
+  - `[` / `]` (prev/next hunk) → `[h` / `]h`
+  - `;h` / `;l` / `;k` / `;e` / `;c` → `space b` / `space d` / `space k` / `space e` / `space c`
+  - `Space` no longer toggles file-tree expand (use `Enter` instead); it is now
+    the global leader prefix.
+
+### Features
+
+- **Fuzzy file picker (`space f`)** — Helix-style overlay over the current
+  diff's files. Type to filter (nucleo matcher), Enter to jump.
+- **Jujutsu defaults**: in jj repos with no `-r` flag, `tuicr` auto-loads
+  `((heads(::@- & bookmarks()) | trunk())..@) ~ empty()` — the commits
+  since the most recent local bookmark on the stack (or since trunk if
+  none), excluding empty commits. Only the topmost commit is pre-selected;
+  the rest of the stack stays one keypress away in the inline selector.
+- **Change IDs in commit list**: jj commits now display as
+  `<change_id> (<commit_id>) summary…` so an evolved change is still
+  identifiable after a rewrite.
+- **Per-commit bookmarks**: jj commits with a local bookmark surface that
+  bookmark in the inline commit selector and full-screen picker.
+- New `space` leader menu, new `g` goto chord (`gg`/`ge`/`gh`/`gl`), and new
+  `[`/`]` bracket chords (`[f`/`]f`, `[h`/`]h`).
+
 ## [0.12.0] - 2026-05-08
 
 ### Bug Fixes

@@ -13,7 +13,7 @@ use crate::app::{
 };
 use crate::model::{LineOrigin, LineRange, LineSide};
 use crate::theme::Theme;
-use crate::ui::{comment_panel, help_popup, status_bar, styles};
+use crate::ui::{comment_panel, file_picker, help_popup, status_bar, styles};
 use crate::vcs::git::calculate_gap;
 
 pub fn render(frame: &mut Frame, app: &mut App) {
@@ -47,6 +47,11 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     // Render help popup on top if in help mode
     if app.input_mode == InputMode::Help {
         help_popup::render_help(frame, app);
+    }
+
+    // Render fuzzy file picker overlay
+    if app.input_mode == InputMode::FilePicker {
+        file_picker::render_file_picker(frame, app);
     }
 
     // Comment input is now rendered inline in the diff view
@@ -155,15 +160,20 @@ fn render_commit_select(frame: &mut Frame, app: &mut App) {
             };
 
             // Format: > ┌ [x] abc1234  Commit message (author, date)
+            // For jj backends we prefer the change_id (stable across rewrites)
+            // and append the commit_id in parens for git interop.
             let time_str = commit.time.format("%Y-%m-%d").to_string();
+            let id_display = match (&commit.short_change_id, &commit.short_id) {
+                (Some(change), commit_id) if !change.is_empty() => {
+                    format!("{change} ({commit_id}) ")
+                }
+                (_, commit_id) => format!("{commit_id} "),
+            };
             let mut spans = vec![
                 Span::styled(format!("{pointer} "), style),
                 Span::styled(format!("{range_marker} "), range_style),
                 Span::styled(format!("{checkbox} "), checkbox_style),
-                Span::styled(
-                    format!("{} ", commit.short_id),
-                    styles::hash_style(&app.theme),
-                ),
+                Span::styled(id_display, styles::hash_style(&app.theme)),
             ];
 
             if commit.id == crate::app::STAGED_SELECTION_ID
@@ -360,14 +370,17 @@ fn render_inline_commit_selector(frame: &mut Frame, app: &mut App, area: Rect) {
                 let pointer = if is_cursor { "> " } else { "  " };
 
                 let time_str = commit.time.format("%Y-%m-%d").to_string();
+                let id_display = match (&commit.short_change_id, &commit.short_id) {
+                    (Some(change), commit_id) if !change.is_empty() => {
+                        format!("{change} ({commit_id}) ")
+                    }
+                    (_, commit_id) => format!("{commit_id} "),
+                };
                 let mut spans = vec![
                     Span::styled(pointer.to_string(), style),
                     Span::styled(format!("{} ", range_marker), range_style),
                     Span::styled(format!("{} ", checkbox), checkbox_style),
-                    Span::styled(
-                        format!("{} ", commit.short_id),
-                        styles::hash_style(&app.theme),
-                    ),
+                    Span::styled(id_display, styles::hash_style(&app.theme)),
                 ];
 
                 if let Some(branch_name) = &commit.branch_name {

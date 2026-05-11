@@ -14,13 +14,13 @@ pub enum Action {
     GoToTop,
     GoToBottom,
     Digit(u8),
-    NextFile,
-    PrevFile,
-    NextHunk,
-    PrevHunk,
+    // Chord prefixes (set state in main.rs; the following key dispatches)
     PendingZCommand,
     PendingShiftZCommand,
-    PendingSemicolonCommand,
+    PendingGCommand,
+    PendingSpaceCommand,
+    PendingBracketLeftCommand,
+    PendingBracketRightCommand,
     ScrollLeft(usize),
     ScrollRight(usize),
     ScrollViewDown(usize),
@@ -87,7 +87,6 @@ pub enum Action {
     /// Cycle inline commit selector to previous individual commit (`(`)
     CycleCommitPrev,
 
-    ToggleExpand,
     ExpandAll,
     CollapseAll,
     SelectFileFull,
@@ -106,12 +105,13 @@ pub fn map_key_to_action(key: KeyEvent, mode: InputMode) -> Action {
         InputMode::Confirm => map_confirm_mode(key),
         InputMode::CommitSelect => map_commit_select_mode(key),
         InputMode::VisualSelect => map_visual_mode(key),
+        InputMode::FilePicker => map_file_picker_mode(key),
     }
 }
 
 fn map_normal_mode(key: KeyEvent) -> Action {
     match (key.code, key.modifiers) {
-        // Cursor movement (vim-like: cursor moves, scroll follows when needed)
+        // Cursor movement (Helix-style: cursor moves, scroll follows when needed)
         (KeyCode::Char('j') | KeyCode::Down, KeyModifiers::NONE) => Action::CursorDown(1),
         (KeyCode::Char('k') | KeyCode::Up, KeyModifiers::NONE) => Action::CursorUp(1),
         (KeyCode::Char('e'), KeyModifiers::CONTROL) => Action::ScrollViewDown(1),
@@ -122,17 +122,16 @@ fn map_normal_mode(key: KeyEvent) -> Action {
         (KeyCode::Char('b'), KeyModifiers::CONTROL) => Action::PageUp,
         (KeyCode::PageDown, KeyModifiers::NONE) => Action::PageDown,
         (KeyCode::PageUp, KeyModifiers::NONE) => Action::PageUp,
-        (KeyCode::Char('g'), KeyModifiers::NONE) => Action::GoToTop,
-        (KeyCode::Char('G'), _) => Action::GoToBottom,
+
+        // Chord prefixes (Helix-style leaders)
+        (KeyCode::Char('g'), KeyModifiers::NONE) => Action::PendingGCommand,
         (KeyCode::Char('z'), KeyModifiers::NONE) => Action::PendingZCommand,
         (KeyCode::Char('Z'), _) => Action::PendingShiftZCommand,
-        (KeyCode::Char(';'), _) => Action::PendingSemicolonCommand,
+        (KeyCode::Char(' '), KeyModifiers::NONE) => Action::PendingSpaceCommand,
+        (KeyCode::Char('['), _) => Action::PendingBracketLeftCommand,
+        (KeyCode::Char(']'), _) => Action::PendingBracketRightCommand,
 
-        // File navigation (use _ for modifiers since shift is implicit in the character)
-        (KeyCode::Char('}'), _) => Action::NextFile,
-        (KeyCode::Char('{'), _) => Action::PrevFile,
-        (KeyCode::Char(']'), _) => Action::NextHunk,
-        (KeyCode::Char('['), _) => Action::PrevHunk,
+        // Inline commit cycle (kept from original)
         (KeyCode::Char(')'), _) => Action::CycleCommitNext,
         (KeyCode::Char('('), _) => Action::CycleCommitPrev,
 
@@ -166,12 +165,35 @@ fn map_normal_mode(key: KeyEvent) -> Action {
         // Quick quit
         (KeyCode::Char('q'), KeyModifiers::NONE) => Action::Quit,
 
-        (KeyCode::Char(' '), KeyModifiers::NONE) => Action::ToggleExpand,
+        // Tree expansion (file list panel)
         (KeyCode::Char('o'), KeyModifiers::NONE) => Action::ExpandAll,
         (KeyCode::Char('O'), _) => Action::CollapseAll,
 
         (KeyCode::Char(c @ '0'..='9'), KeyModifiers::NONE) => Action::Digit(c as u8 - b'0'),
 
+        _ => Action::None,
+    }
+}
+
+fn map_file_picker_mode(key: KeyEvent) -> Action {
+    match (key.code, key.modifiers) {
+        (KeyCode::Esc, KeyModifiers::NONE) => Action::ExitMode,
+        (KeyCode::Char('c'), KeyModifiers::CONTROL) => Action::ExitMode,
+        (KeyCode::Enter, KeyModifiers::NONE) => Action::SubmitInput,
+        (KeyCode::Up, _) => Action::CursorUp(1),
+        (KeyCode::Down, _) => Action::CursorDown(1),
+        // Tab / Shift-Tab cycle the result list (Helix picker convention)
+        (KeyCode::Tab, KeyModifiers::NONE) => Action::CursorDown(1),
+        (KeyCode::BackTab, _) => Action::CursorUp(1),
+        (KeyCode::Char('k'), KeyModifiers::CONTROL) => Action::CursorUp(1),
+        (KeyCode::Char('j'), KeyModifiers::CONTROL) => Action::CursorDown(1),
+        (KeyCode::Char('p'), KeyModifiers::CONTROL) => Action::CursorUp(1),
+        (KeyCode::Char('n'), KeyModifiers::CONTROL) => Action::CursorDown(1),
+        (KeyCode::Backspace, mods) if mods.contains(KeyModifiers::ALT) => Action::DeleteWord,
+        (KeyCode::Backspace, KeyModifiers::NONE) => Action::DeleteChar,
+        (KeyCode::Char('w'), KeyModifiers::CONTROL) => Action::DeleteWord,
+        (KeyCode::Char('u'), KeyModifiers::CONTROL) => Action::ClearLine,
+        (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) => Action::InsertChar(c),
         _ => Action::None,
     }
 }
@@ -343,15 +365,30 @@ mod tests {
     }
 
     #[test]
-    fn should_map_uppercase_g_to_go_to_bottom_in_normal_mode() {
-        let action = map_normal_mode(key_shift('G'));
-        assert_eq!(action, Action::GoToBottom);
+    fn should_map_lowercase_g_to_pending_g_chord_in_normal_mode() {
+        let action = map_normal_mode(key(KeyCode::Char('g')));
+        assert_eq!(action, Action::PendingGCommand);
     }
 
     #[test]
-    fn should_map_lowercase_g_to_go_to_top_in_normal_mode() {
-        let action = map_normal_mode(key(KeyCode::Char('g')));
-        assert_eq!(action, Action::GoToTop);
+    fn should_map_space_to_pending_space_chord_in_normal_mode() {
+        let action = map_normal_mode(key(KeyCode::Char(' ')));
+        assert_eq!(action, Action::PendingSpaceCommand);
+    }
+
+    #[test]
+    fn should_map_bracket_chords_in_normal_mode() {
+        let action = map_normal_mode(key(KeyCode::Char('[')));
+        assert_eq!(action, Action::PendingBracketLeftCommand);
+        let action = map_normal_mode(key(KeyCode::Char(']')));
+        assert_eq!(action, Action::PendingBracketRightCommand);
+    }
+
+    #[test]
+    fn shift_g_is_no_longer_a_bottom_alias() {
+        // GoToBottom now reached via `ge`, dispatched in main.rs chord state.
+        let action = map_normal_mode(key_shift('G'));
+        assert_ne!(action, Action::GoToBottom);
     }
 
     #[test]
@@ -414,6 +451,33 @@ mod tests {
         assert_eq!(map_comment_mode(alt_backspace), Action::DeleteWord);
         assert_eq!(map_command_mode(alt_backspace), Action::DeleteWord);
         assert_eq!(map_search_mode(alt_backspace), Action::DeleteWord);
+        assert_eq!(map_file_picker_mode(alt_backspace), Action::DeleteWord);
+    }
+
+    #[test]
+    fn file_picker_mode_maps_text_input_and_navigation() {
+        assert_eq!(map_file_picker_mode(key(KeyCode::Esc)), Action::ExitMode);
+        assert_eq!(map_file_picker_mode(key(KeyCode::Enter)), Action::SubmitInput);
+        assert_eq!(
+            map_file_picker_mode(key(KeyCode::Char('a'))),
+            Action::InsertChar('a')
+        );
+        assert_eq!(
+            map_file_picker_mode(key(KeyCode::Backspace)),
+            Action::DeleteChar
+        );
+        assert_eq!(map_file_picker_mode(key(KeyCode::Up)), Action::CursorUp(1));
+        assert_eq!(
+            map_file_picker_mode(key(KeyCode::Down)),
+            Action::CursorDown(1)
+        );
+        let ctrl_j = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL);
+        assert_eq!(map_file_picker_mode(ctrl_j), Action::CursorDown(1));
+
+        // Tab / Shift-Tab cycle the result list (Helix picker convention).
+        assert_eq!(map_file_picker_mode(key(KeyCode::Tab)), Action::CursorDown(1));
+        let shift_tab = KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT);
+        assert_eq!(map_file_picker_mode(shift_tab), Action::CursorUp(1));
     }
 
     #[test]

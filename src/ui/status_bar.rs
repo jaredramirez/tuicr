@@ -204,13 +204,14 @@ pub fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
                     " VISUAL ".to_string()
                 }
             }
+            InputMode::FilePicker => " FILES ".to_string(),
         };
 
         let mode_span = Span::styled(mode_str, styles::mode_style(theme));
 
         let hints = match app.input_mode {
             InputMode::Normal => {
-                " j/k:scroll  {/}:file  r:reviewed  c:comment  ;c:review  V:visual  /:search  ?:help  :q:quit "
+                " j/k:scroll  ]f/[f:file  r:reviewed  c:comment  space:menu  V:visual  /:search  ?:help  :q:quit "
             }
             InputMode::Command => " Enter:execute  Esc:cancel ",
             InputMode::Search => " Enter:search  Esc:cancel ",
@@ -221,6 +222,7 @@ pub fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
                 " j/k:navigate  Space:select  Enter:confirm  Esc:back  q:quit "
             }
             InputMode::VisualSelect => " j/k:extend  c/Enter:comment  y:yank  Esc/V:cancel ",
+            InputMode::FilePicker => " type:filter  Enter:open  ↑↓:move  Esc:cancel ",
         };
         let hints_span = Span::styled(hints, Style::default().fg(theme.fg_secondary));
 

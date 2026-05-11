@@ -26,14 +26,16 @@ It makes my AI-assisted development go brrrrrr.
 
 ## Overview
 
-A GitHub-style diff viewer in your terminal with vim keybindings. Scroll through
-changed files, leave comments, mark files as reviewed, and copy your full review
-to clipboard in a format ready to paste back to the agent.
+A GitHub-style diff viewer in your terminal with Helix-inspired keybindings.
+Scroll through changed files, leave comments, mark files as reviewed, and copy
+your full review to clipboard in a format ready to paste back to the agent.
 
 ## Features
 
 - **Infinite scroll diff view** - All changed files in one continuous scroll (GitHub-style)
-- **Vim keybindings** - Navigate with `j/k`, `Ctrl-d/u`, `g/G`, `{/}`, `[/]`
+- **Helix-inspired keybindings** - `space` leader menu, `gg`/`ge` goto, `[f`/`]f` and `[h`/`]h` bracket nav, `space f` fuzzy file picker
+- **Fuzzy file picker** - Press `space f` to fuzzy-jump to any file in the current diff
+- **Jujutsu-native** - On startup, auto-loads the commits since your most recent local bookmark (or trunk); commit list shows change IDs and bookmarks
 - **Expandable context** - Press Enter on "... expand (N lines) ..." to reveal hidden context between hunks
 - **Comments** - Add review-level, file-level, or line-level comments with types
 - **Visual mode** - Select line ranges with `v` / `V` and comment on multiple lines at once
@@ -41,7 +43,6 @@ to clipboard in a format ready to paste back to the agent.
 - **`.tuicrignore` support** - Exclude matching files from review diffs
 - **Clipboard export** - Copy structured Markdown optimized for LLM consumption
 - **Session persistence** - Reviews auto-save and reload on restart
-- **Jujutsu support** - Built-in jj support (tried first since jj repos are Git-backed)
 - **Mercurial support** - Built-in hg support
 
 ## Installation
@@ -96,6 +97,31 @@ tuicr
 ```
 
 Detection order: Jujutsu → Git → Mercurial. Jujutsu is tried first because jj repos are Git-backed.
+
+#### Jujutsu defaults
+
+In jj repos, `tuicr` (with no `-r`) auto-loads:
+
+```
+((heads(::@- & bookmarks()) | trunk())..@) ~ empty()
+```
+
+In plain English: the commits since the **most recent local bookmark** on the
+path to `@` (typically what you last pushed), or since `trunk()` if there's
+no such bookmark. Empty commits are excluded.
+
+Only the topmost commit (`@`) is pre-selected — the inline commit selector
+shows the full stack so you can widen the review one keypress at a time
+(`Space` to toggle, `j`/`k` to navigate).
+
+The commit list shows jj change IDs (stable across rewrites) with the
+underlying commit ID in parens, plus any local bookmarks attached to each
+change.
+
+Pass `-r <revset>` to override; the user's revset wins, and in that case
+the full range is pre-selected as you'd expect. If the default revset
+resolves to nothing (e.g., a fresh repo), `tuicr` falls back to the standard
+commit picker.
 
 ### Options
 
@@ -227,6 +253,9 @@ For full native terminal selection across the whole UI, hold your terminal's byp
 
 ### Keybindings
 
+Inspired by [Helix](https://helix-editor.com/): chord prefixes (`g`, `space`,
+`[`, `]`, `z`, `Z`) replace vim-style single-key actions.
+
 #### Navigation
 
 | Key | Action |
@@ -237,35 +266,38 @@ For full native terminal selection across the whole UI, hold your terminal's byp
 | `l` / `→` | Scroll right |
 | `Ctrl-d` / `Ctrl-u` | Half page down/up |
 | `Ctrl-f` / `Ctrl-b` | Full page down/up |
-| `g` / `G` | Go to first/last file |
+| `gg` / `ge` | Go to first / last file |
+| `gh` / `gl` | Scroll to start / end of line |
 | `{N}G` | Go to source line N in current file |
-| `{` / `}` | Jump to previous/next file |
-| `[` / `]` | Jump to previous/next hunk |
+| `[f` / `]f` | Jump to previous / next file |
+| `[h` / `]h` | Jump to previous / next hunk |
 | `/` | Search within diff |
-| `n` / `N` | Next/previous search match |
+| `n` / `N` | Next / previous search match |
 | `Enter` | Expand/collapse hidden context between hunks |
 | `zz` | Center cursor on screen |
+
+#### Space Leader Menu
+
+| Key | Action |
+|-----|--------|
+| `space f` | **Fuzzy file picker** (filter by typing, Enter to open) |
+| `space e` | Toggle file list visibility |
+| `space b` | Focus file list (Helix "buffer") |
+| `space d` | Focus diff |
+| `space k` | Focus commit selector (when visible) |
+| `space c` | Add review-level comment |
+| `space y` | Copy review to clipboard |
+| `space /` | Search within diff |
+| `space ?` | Toggle help |
 
 #### File Tree
 
 | Key | Action |
 |-----|--------|
-| `Space` | Toggle expand directory |
 | `Enter` | Expand directory / Jump to file in diff |
 | `o` | Expand all directories |
 | `O` | Collapse all directories |
-
-#### Panel Focus
-
-| Key | Action |
-|-----|--------|
-| `Tab` / `Shift-Tab` | Toggle focus forward/backward between file list, diff, and commit selector |
-| `;h` | Focus file list (left panel) |
-| `;l` | Focus diff view (right panel) |
-| `;k` | Focus commit selector (top panel) |
-| `;j` | Focus diff view |
-| `;e` | Toggle file list visibility |
-| `Enter` | Select file (when file list is focused) |
+| `Tab` / `Shift-Tab` | Toggle focus between file list, diff, and commit selector |
 
 #### Review Actions
 
@@ -274,7 +306,7 @@ For full native terminal selection across the whole UI, hold your terminal's byp
 | `r` | Toggle file reviewed |
 | `c` | Add line comment (or file comment if not on a diff line) |
 | `C` | Add file comment |
-| `;c` | Add review comment |
+| `space c` | Add review comment |
 | `v` / `V` | Enter visual mode for range comments |
 | `dd` | Delete comment at cursor |
 | `i` | Edit comment at cursor |

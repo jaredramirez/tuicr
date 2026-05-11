@@ -37,8 +37,8 @@ use app::{App, FocusedPanel, InputMode};
 use handler::{
     handle_command_action, handle_comment_action, handle_commit_select_action,
     handle_commit_selector_action, handle_confirm_action, handle_diff_action,
-    handle_file_list_action, handle_help_action, handle_mouse_event, handle_search_action,
-    handle_visual_action,
+    handle_file_list_action, handle_file_picker_action, handle_help_action, handle_mouse_event,
+    handle_search_action, handle_visual_action,
 };
 use input::{Action, map_key_to_action};
 use theme::{parse_cli_args, resolve_theme_with_config};
@@ -233,14 +233,19 @@ fn main() -> anyhow::Result<()> {
         app.focused_panel = FocusedPanel::Diff;
     }
 
-    // Track pending z command for zz centering
+    // Track pending z command for zz centering / zt top / zb bottom
     let mut pending_z = false;
     // Track pending Z command for ZZ export+quit / ZQ quit
     let mut pending_shift_z = false;
     // Track pending d command for dd delete
     let mut pending_d = false;
-    // Track pending ; command for ;e toggle file list
-    let mut pending_semicolon = false;
+    // Track pending g command (Helix goto-leader): gg/ge/gh/gl/gd
+    let mut pending_g = false;
+    // Track pending Space command (Helix leader): space f/e/b/d/k/c/y/?
+    let mut pending_space = false;
+    // Track pending [/] bracket chords (Helix): [f/]f files, [h/]h hunks, [c/]c comments
+    let mut pending_bracket_left = false;
+    let mut pending_bracket_right = false;
     // Track pending Ctrl+C for "press twice to exit" (with timestamp for 2s timeout)
     let mut pending_ctrl_c: Option<Instant> = None;
 
@@ -353,39 +358,119 @@ fn main() -> anyhow::Result<()> {
                         // Otherwise fall through to normal handling
                     }
 
-                    // Handle pending ; command for panel focus, file list toggle, and review comments
-                    if pending_semicolon {
-                        pending_semicolon = false;
+                    // Handle pending g command (Helix goto-leader)
+                    if pending_g {
+                        pending_g = false;
                         match key.code {
+                            // gg: jump to top of diff (first file)
+                            crossterm::event::KeyCode::Char('g') => {
+                                app.jump_to_file(0);
+                                continue;
+                            }
+                            // ge: jump to bottom of diff (last file)
+                            crossterm::event::KeyCode::Char('e') => {
+                                app.jump_to_bottom();
+                                continue;
+                            }
+                            // gh: scroll all the way left
+                            crossterm::event::KeyCode::Char('h') => {
+                                app.scroll_left(usize::MAX);
+                                continue;
+                            }
+                            // gl: scroll right
+                            crossterm::event::KeyCode::Char('l') => {
+                                app.scroll_right(40);
+                                continue;
+                            }
+                            _ => {} // unknown chord — fall through
+                        }
+                    }
+
+                    // Handle pending Space command (Helix leader menu)
+                    if pending_space {
+                        pending_space = false;
+                        match key.code {
+                            // space f: fuzzy file picker
+                            crossterm::event::KeyCode::Char('f') => {
+                                app.open_file_picker();
+                                continue;
+                            }
+                            // space e: toggle file list
                             crossterm::event::KeyCode::Char('e') => {
                                 app.toggle_file_list();
                                 continue;
                             }
-                            crossterm::event::KeyCode::Char('h') => {
+                            // space b: focus file list (Helix "buffer")
+                            crossterm::event::KeyCode::Char('b') => {
                                 app.focused_panel = app::FocusedPanel::FileList;
                                 continue;
                             }
-                            crossterm::event::KeyCode::Char('l') => {
+                            // space d: focus diff
+                            crossterm::event::KeyCode::Char('d') => {
                                 app.focused_panel = app::FocusedPanel::Diff;
                                 continue;
                             }
+                            // space k: focus inline commit selector when visible
                             crossterm::event::KeyCode::Char('k') => {
                                 if app.has_inline_commit_selector() {
                                     app.focused_panel = app::FocusedPanel::CommitSelector;
                                 }
                                 continue;
                             }
-                            crossterm::event::KeyCode::Char('j') => {
-                                app.focused_panel = app::FocusedPanel::Diff;
-                                continue;
-                            }
+                            // space c: review-level comment
                             crossterm::event::KeyCode::Char('c') => {
                                 app.enter_review_comment_mode();
                                 continue;
                             }
+                            // space y: export review
+                            crossterm::event::KeyCode::Char('y') => {
+                                handler::handle_export(&mut app);
+                                continue;
+                            }
+                            // space ?: help (alias for ?)
+                            crossterm::event::KeyCode::Char('?') => {
+                                app.toggle_help();
+                                continue;
+                            }
+                            // space /: search (alias for /)
+                            crossterm::event::KeyCode::Char('/') => {
+                                app.enter_search_mode();
+                                continue;
+                            }
+                            _ => {} // unknown chord — fall through
+                        }
+                    }
+
+                    // Handle pending [ chord (Helix bracket-prev): [f prev file, [h prev hunk
+                    if pending_bracket_left {
+                        pending_bracket_left = false;
+                        match key.code {
+                            crossterm::event::KeyCode::Char('f') => {
+                                app.prev_file();
+                                continue;
+                            }
+                            crossterm::event::KeyCode::Char('h') => {
+                                app.prev_hunk();
+                                continue;
+                            }
                             _ => {}
                         }
-                        // Otherwise fall through to normal handling
+                    }
+
+                    // Handle pending ] chord (Helix bracket-next): ]f next file, ]h next hunk
+                    if pending_bracket_right {
+                        pending_bracket_right = false;
+                        match key.code {
+                            crossterm::event::KeyCode::Char('f') => {
+                                app.next_file();
+                                continue;
+                            }
+                            crossterm::event::KeyCode::Char('h') => {
+                                app.next_hunk();
+                                continue;
+                            }
+                            _ => {}
+                        }
                     }
 
                     let action = map_key_to_action(key, app.input_mode);
@@ -407,8 +492,23 @@ fn main() -> anyhow::Result<()> {
                             app.pending_count = None;
                             continue;
                         }
-                        Action::PendingSemicolonCommand => {
-                            pending_semicolon = true;
+                        Action::PendingGCommand => {
+                            pending_g = true;
+                            app.pending_count = None;
+                            continue;
+                        }
+                        Action::PendingSpaceCommand => {
+                            pending_space = true;
+                            app.pending_count = None;
+                            continue;
+                        }
+                        Action::PendingBracketLeftCommand => {
+                            pending_bracket_left = true;
+                            app.pending_count = None;
+                            continue;
+                        }
+                        Action::PendingBracketRightCommand => {
+                            pending_bracket_right = true;
                             app.pending_count = None;
                             continue;
                         }
@@ -448,6 +548,7 @@ fn main() -> anyhow::Result<()> {
                         InputMode::Confirm => handle_confirm_action(&mut app, action),
                         InputMode::CommitSelect => handle_commit_select_action(&mut app, action),
                         InputMode::VisualSelect => handle_visual_action(&mut app, action),
+                        InputMode::FilePicker => handle_file_picker_action(&mut app, action),
                         InputMode::Normal => match app.focused_panel {
                             FocusedPanel::FileList => handle_file_list_action(&mut app, action),
                             FocusedPanel::Diff => handle_diff_action(&mut app, action),

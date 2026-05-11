@@ -15,7 +15,10 @@
       {
         defaultPackage = naersk-lib.buildPackage ./.;
         devShell = with pkgs; mkShell {
-          buildInputs = [ cargo rustc rustfmt rustPackages.clippy jj git ];
+          # NB: `pkgs.jj` is a JSON stream editor; the Jujutsu VCS is `pkgs.jujutsu`.
+          # Both expose a `jj` binary, so picking the wrong one causes tuicr to
+          # fail at startup and silently skips the jj backend tests.
+          buildInputs = [ cargo rustc rustfmt rustPackages.clippy jujutsu git ];
           RUST_SRC_PATH = rustPlatform.rustLibSrc;
         };
       }

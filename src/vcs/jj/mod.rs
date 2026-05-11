@@ -215,14 +215,20 @@ impl VcsBackend for JjBackend {
     }
 
     fn get_recent_commits(&self, offset: usize, limit: usize) -> Result<Vec<CommitInfo>> {
-        // Use jj log with a template to get structured output
-        // Template fields separated by \x00, records separated by \x01
-        // Note: jj uses change_id for identifying changes, commit_id for the underlying git commit
+        // Template fields separated by \x00, records separated by \x01.
+        // Fields (in order):
+        //   0: commit_id
+        //   1: commit_id.short()
+        //   2: change_id
+        //   3: change_id.short()
+        //   4: description
+        //   5: author.email()
+        //   6: committer.timestamp()
+        //   7: bookmarks
         //
         // jj log doesn't have a --skip option, so we fetch offset+limit commits
-        // and skip the first `offset` in Rust code
+        // and skip the first `offset` in Rust code.
         let fetch_count = offset + limit;
-        let template = r#"commit_id ++ "\x00" ++ commit_id.short() ++ "\x00" ++ description ++ "\x00" ++ author.email() ++ "\x00" ++ committer.timestamp() ++ "\x01""#;
         let output = run_jj_command(
             &self.info.root_path,
             &[
@@ -233,41 +239,15 @@ impl VcsBackend for JjBackend {
                 &fetch_count.to_string(),
                 "--no-graph",
                 "-T",
-                template,
+                JJ_COMMIT_TEMPLATE,
             ],
         )?;
 
         let mut commits = Vec::new();
         for record in output.split('\x01') {
-            let record = record.trim();
-            if record.is_empty() {
-                continue;
+            if let Some(commit) = parse_jj_commit_record(record) {
+                commits.push(commit);
             }
-
-            let parts: Vec<&str> = record.split('\x00').collect();
-            if parts.len() < 5 {
-                continue;
-            }
-
-            let id = parts[0].to_string();
-            let short_id = parts[1].to_string();
-            let (summary, body) = parse_description(parts[2]);
-            let author = parts[3].to_string();
-
-            // jj timestamp format is ISO 8601: "2024-01-15T10:30:00.000-05:00"
-            let time = DateTime::parse_from_rfc3339(parts[4])
-                .map(|dt| dt.with_timezone(&Utc))
-                .unwrap_or_else(|_| Utc::now());
-
-            commits.push(CommitInfo {
-                id,
-                short_id,
-                branch_name: None,
-                summary,
-                body,
-                author,
-                time,
-            });
         }
 
         Ok(commits.into_iter().skip(offset).collect())
@@ -315,51 +295,63 @@ impl VcsBackend for JjBackend {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
-        // Use jj log with a revset matching the given IDs
+        // Use jj log with a revset matching the given IDs. jj resolves both
+        // commit IDs and change IDs the same way here.
         let revset = ids
             .iter()
             .map(|id| id.as_str())
             .collect::<Vec<_>>()
             .join(" | ");
-        let template = r#"commit_id ++ "\x00" ++ commit_id.short() ++ "\x00" ++ description ++ "\x00" ++ author.email() ++ "\x00" ++ committer.timestamp() ++ "\x01""#;
         let output = run_jj_command(
             &self.info.root_path,
-            &["log", "-r", &revset, "--no-graph", "-T", template],
+            &[
+                "log",
+                "-r",
+                &revset,
+                "--no-graph",
+                "-T",
+                JJ_COMMIT_TEMPLATE,
+            ],
         )?;
 
-        let mut by_id: HashMap<String, CommitInfo> = HashMap::new();
+        let mut by_commit_id: HashMap<String, CommitInfo> = HashMap::new();
+        let mut by_change_id: HashMap<String, CommitInfo> = HashMap::new();
         for record in output.split('\x01') {
-            let record = record.trim();
-            if record.is_empty() {
-                continue;
+            if let Some(commit) = parse_jj_commit_record(record) {
+                if let Some(change_id) = commit.change_id.clone() {
+                    by_change_id.insert(change_id, commit.clone());
+                }
+                by_commit_id.insert(commit.id.clone(), commit);
             }
-            let parts: Vec<&str> = record.split('\x00').collect();
-            if parts.len() < 5 {
-                continue;
-            }
-            let id = parts[0].to_string();
-            let short_id = parts[1].to_string();
-            let (summary, body) = parse_description(parts[2]);
-            let author = parts[3].to_string();
-            let time = DateTime::parse_from_rfc3339(parts[4])
-                .map(|dt| dt.with_timezone(&Utc))
-                .unwrap_or_else(|_| Utc::now());
-            by_id.insert(
-                id.clone(),
-                CommitInfo {
-                    id,
-                    short_id,
-                    branch_name: None,
-                    summary,
-                    body,
-                    author,
-                    time,
-                },
-            );
         }
 
-        // Return in input order
-        Ok(ids.iter().filter_map(|id| by_id.remove(id)).collect())
+        // Return in input order, looking up by either commit or change id.
+        Ok(ids
+            .iter()
+            .filter_map(|id| {
+                by_commit_id
+                    .remove(id)
+                    .or_else(|| by_change_id.remove(id))
+            })
+            .collect())
+    }
+
+    fn default_review_revset(&self) -> Option<String> {
+        // "Everything in my stack since the most recent local bookmark below
+        // @, or since trunk() if no such bookmark exists, excluding empty
+        // commits." This matches the typical jj workflow: bookmarks mark
+        // what's already been pushed, so reviewing from the last bookmark
+        // forward shows exactly the unpushed work.
+        //
+        // Resolution detail: when both `heads(::@- & bookmarks())` and
+        // `trunk()` are present, the union with `..@` collapses to the
+        // tighter (closer) ancestor — so an in-stack bookmark naturally
+        // wins over trunk. With no bookmarks on the path, the expression
+        // degrades to `trunk()..@`.
+        //
+        // Falls back gracefully (NoChanges) when the revset is empty,
+        // letting the commit picker take over.
+        Some("((heads(::@- & bookmarks()) | trunk())..@) ~ empty()".to_string())
     }
 
     fn get_working_tree_with_commits_diff(
@@ -417,6 +409,90 @@ fn jj_show_batch(root: &Path, rev: &str, paths: &[PathBuf]) -> Result<HashMap<Pa
     Ok(parse_batched_files(&output))
 }
 
+/// jj log template emitting one record per commit, fields separated by `\x00`
+/// and records by `\x01`.
+///
+/// Fields (in order):
+///   0: commit_id
+///   1: commit_id.short()
+///   2: change_id
+///   3: change_id.short()
+///   4: description
+///   5: author.email()
+///   6: committer.timestamp()
+///   7: bookmarks (space-separated; may include remote tracking `name@upstream`)
+const JJ_COMMIT_TEMPLATE: &str = concat!(
+    r#"commit_id ++ "\x00" ++ commit_id.short() ++ "\x00" "#,
+    r#"++ change_id ++ "\x00" ++ change_id.short() ++ "\x00" "#,
+    r#"++ description ++ "\x00" ++ author.email() ++ "\x00" "#,
+    r#"++ committer.timestamp() ++ "\x00" ++ bookmarks ++ "\x01""#,
+);
+
+/// Parse a single record from the jj log template above into a `CommitInfo`.
+/// Returns `None` for empty or malformed records.
+fn parse_jj_commit_record(record: &str) -> Option<CommitInfo> {
+    let record = record.trim();
+    if record.is_empty() {
+        return None;
+    }
+
+    let parts: Vec<&str> = record.split('\x00').collect();
+    if parts.len() < 8 {
+        return None;
+    }
+
+    let id = parts[0].to_string();
+    let short_id = parts[1].to_string();
+    let change_id = {
+        let s = parts[2].trim();
+        if s.is_empty() {
+            None
+        } else {
+            Some(s.to_string())
+        }
+    };
+    let short_change_id = {
+        let s = parts[3].trim();
+        if s.is_empty() {
+            None
+        } else {
+            Some(s.to_string())
+        }
+    };
+    let (summary, body) = parse_description(parts[4]);
+    let author = parts[5].to_string();
+
+    // jj timestamp format is ISO 8601: "2024-01-15T10:30:00.000-05:00"
+    let time = DateTime::parse_from_rfc3339(parts[6])
+        .map(|dt| dt.with_timezone(&Utc))
+        .unwrap_or_else(|_| Utc::now());
+
+    // First local bookmark (filter out remote tracking like "name@upstream").
+    let branch_name = {
+        let raw = parts[7].trim();
+        if raw.is_empty() {
+            None
+        } else {
+            raw.split_whitespace()
+                .find(|b| !b.contains('@'))
+                .or_else(|| raw.split_whitespace().next())
+                .map(|s| s.to_string())
+        }
+    };
+
+    Some(CommitInfo {
+        id,
+        short_id,
+        change_id,
+        short_change_id,
+        branch_name,
+        summary,
+        body,
+        author,
+        time,
+    })
+}
+
 /// Run a jj command and return its stdout
 fn run_jj_command(root: &Path, args: &[&str]) -> Result<String> {
     let output = Command::new("jj")
@@ -442,12 +518,80 @@ mod tests {
     use super::*;
     use std::fs;
 
-    /// Check if jj command is available
+    /// Guards against a class of bug where the template was assembled with
+    /// `concat!` and the `++` operators were lost at segment boundaries,
+    /// producing a string like `..."\x00"change_id...` that jj refuses to
+    /// parse. This test runs without jj installed, so it catches regressions
+    /// even when the integration tests below skip.
+    #[test]
+    fn jj_commit_template_is_well_formed() {
+        let t = JJ_COMMIT_TEMPLATE;
+
+        // Every required field must appear, in order, separated by `++`.
+        for field in [
+            "commit_id",
+            "commit_id.short()",
+            "change_id",
+            "change_id.short()",
+            "description",
+            "author.email()",
+            "committer.timestamp()",
+            "bookmarks",
+        ] {
+            assert!(
+                t.contains(field),
+                "template missing field {field:?}: {t:?}"
+            );
+        }
+
+        // The template must end with the record-separator literal AND must
+        // never have a field name directly adjacent to a string literal
+        // (the original concat! bug produced `..."\x00"change_id...`).
+        assert!(
+            t.ends_with(r#"++ bookmarks ++ "\x01""#),
+            "template tail malformed: {t:?}"
+        );
+        assert!(
+            !t.contains(r#""change_id"#),
+            "template has field directly glued to a literal (concat! bug): {t:?}"
+        );
+
+        // Surface-level sanity: a properly formed template uses `++` between
+        // every pair of operands. With 8 fields and 8 separator literals
+        // (7 field separators + 1 record terminator), that's 16 atoms and
+        // 15 `++` operators. The broken concat! version had fewer.
+        let plus_pairs = t.matches("++").count();
+        assert_eq!(
+            plus_pairs, 15,
+            "expected 15 `++` operators in the template, got {plus_pairs}: {t:?}"
+        );
+    }
+
+    /// Check that the `jj` binary on PATH is actually Jujutsu (not the
+    /// similarly-named JSON Stream Editor, which also exposes `jj`).
+    ///
+    /// The Jujutsu CLI's `--version` output is `jj <semver>`; the JSON tool's
+    /// is `jj - JSON Stream Editor <version>`. We require Jujutsu-specific
+    /// behavior (a working `jj help`) so we don't silently skip the backend
+    /// tests when the wrong binary is on PATH.
     fn jj_available() -> bool {
+        let version = match Command::new("jj").arg("--version").output() {
+            Ok(o) if o.status.success() => o,
+            _ => return false,
+        };
+        let stdout = String::from_utf8_lossy(&version.stdout);
+        if stdout.contains("JSON") {
+            return false;
+        }
+        // Jujutsu has a `help` subcommand listing its top-level commands.
+        // The JSON Stream Editor doesn't.
         Command::new("jj")
-            .arg("--version")
+            .arg("help")
             .output()
-            .map(|o| o.status.success())
+            .map(|o| {
+                o.status.success()
+                    && String::from_utf8_lossy(&o.stdout).contains("git")
+            })
             .unwrap_or(false)
     }
 
@@ -650,10 +794,18 @@ mod tests {
         // jj creates a working copy commit on top, so we may have 4 commits
         assert!(commits.len() >= 3, "Expected at least 3 commits");
 
-        // All commits should have valid ids
+        // All commits should have valid ids and jj-native change ids
         for commit in &commits {
             assert!(!commit.id.is_empty());
             assert!(!commit.short_id.is_empty());
+            assert!(
+                commit.change_id.is_some(),
+                "jj backend must populate change_id"
+            );
+            assert!(
+                commit.short_change_id.is_some(),
+                "jj backend must populate short_change_id"
+            );
         }
 
         // Check that our commit messages are present (may not be in exact order due to working copy)
@@ -1076,6 +1228,30 @@ mod tests {
             .expect("Failed to commit");
 
         Some(temp_dir)
+    }
+
+    #[test]
+    fn test_jj_default_review_revset_is_set() {
+        let Some(temp) = setup_test_repo() else {
+            eprintln!("Skipping test: jj command not available");
+            return;
+        };
+
+        let backend =
+            JjBackend::from_path(temp.path().to_path_buf()).expect("Failed to create jj backend");
+
+        // jj must expose a default revset so startup auto-loads the user's stack.
+        let revset = backend.default_review_revset();
+        assert!(
+            revset.is_some(),
+            "jj backend must return a default review revset"
+        );
+        let revset = revset.unwrap();
+        assert!(
+            revset.contains("trunk()") || revset.contains("@"),
+            "default revset should be jj-native; got {:?}",
+            revset
+        );
     }
 
     #[test]

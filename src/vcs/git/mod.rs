@@ -96,6 +96,8 @@ impl VcsBackend for GitBackend {
             .map(|c| CommitInfo {
                 id: c.id,
                 short_id: c.short_id,
+                change_id: None,
+                short_change_id: None,
                 branch_name: c.branch_name,
                 summary: c.summary,
                 body: c.body,
@@ -124,6 +126,8 @@ impl VcsBackend for GitBackend {
             .map(|c| CommitInfo {
                 id: c.id,
                 short_id: c.short_id,
+                change_id: None,
+                short_change_id: None,
                 branch_name: c.branch_name,
                 summary: c.summary,
                 body: c.body,

@@ -630,13 +630,34 @@ impl App {
         let vcs = detect_vcs()?;
         let vcs_info = vcs.info().clone();
         let highlighter = theme.syntax_highlighter();
+
+        // If the user didn't pass `-r` and the backend exposes a default
+        // review revset, try it. Falling back to the commit picker on any
+        // error keeps git/hg behavior intact (their default_review_revset
+        // returns None).
+        let auto_revisions: Option<String> = if revisions.is_none() && !working_tree {
+            vcs.default_review_revset().and_then(|revset| {
+                vcs.resolve_revisions(&revset)
+                    .ok()
+                    .filter(|ids| !ids.is_empty())
+                    .map(|_| revset)
+            })
+        } else {
+            None
+        };
+        // Track whether the revset came from the backend (vs. user `-r`).
+        // We pre-select only the top commit in the auto-loaded case so the
+        // user lands on a focused diff rather than a sprawling stack-wide one.
+        let auto_loaded_revisions = revisions.is_none() && auto_revisions.is_some();
+        let effective_revisions: Option<&str> = revisions.or(auto_revisions.as_deref());
+
         // Determine the diff source, files, and session based on input.
         // Four paths:
         //   1. -r + -w: combined commit range and uncommitted changes
         //   2. -r only: commit range
         //   3. -w only: working tree directly (skip commit selector)
         //   4. neither: commit selection UI
-        if let Some(revisions) = revisions {
+        if let Some(revisions) = effective_revisions {
             let commit_ids = vcs.resolve_revisions(revisions)?;
 
             if working_tree {
@@ -745,12 +766,22 @@ impl App {
                 path_filter,
             )?;
 
-            // Set up inline commit selector for multi-commit reviews
+            // Set up inline commit selector for multi-commit reviews.
+            // When the revset was auto-loaded (no user `-r`), pre-select only
+            // the topmost commit (typically `@`) so the diff starts focused
+            // on the user's most recent change. The rest of the stack stays
+            // visible in the inline selector for one-keypress widening.
+            // When the user passed `-r` explicitly, honor "everything in the
+            // range is selected" — they asked for that scope.
             if review_commits.len() > 1 {
                 app.range_diff_files = Some(app.diff_files.clone());
                 app.commit_list = review_commits.clone();
                 app.commit_list_cursor = 0;
-                app.commit_selection_range = Some((0, review_commits.len() - 1));
+                app.commit_selection_range = if auto_loaded_revisions {
+                    Some((0, 0))
+                } else {
+                    Some((0, review_commits.len() - 1))
+                };
                 app.commit_list_scroll_offset = 0;
                 app.visible_commit_count = review_commits.len();
                 app.has_more_commit = false;
@@ -762,6 +793,15 @@ impl App {
             app.sort_files_by_directory(true);
             app.expand_all_dirs();
             app.rebuild_annotations();
+
+            // If we narrowed the auto-selected range to just the top commit,
+            // recompute diff_files so the displayed diff matches the selection.
+            if auto_loaded_revisions
+                && app.review_commits.len() > 1
+                && let Err(e) = app.reload_inline_selection()
+            {
+                app.set_warning(format!("Failed to load default revset diff: {e}"));
+            }
 
             Ok(app)
         } else if working_tree {
@@ -1242,6 +1282,8 @@ impl App {
         CommitInfo {
             id: STAGED_SELECTION_ID.to_string(),
             short_id: "STAGED".to_string(),
+            change_id: None,
+            short_change_id: None,
             branch_name: None,
             summary: "Staged changes".to_string(),
             body: None,
@@ -1254,6 +1296,8 @@ impl App {
         CommitInfo {
             id: UNSTAGED_SELECTION_ID.to_string(),
             short_id: "UNSTAGED".to_string(),
+            change_id: None,
+            short_change_id: None,
             branch_name: None,
             summary: "Unstaged changes".to_string(),
             body: None,
@@ -5125,6 +5169,8 @@ mod commit_selection_tests {
         CommitInfo {
             id: id.to_string(),
             short_id: id.to_string(),
+            change_id: None,
+            short_change_id: None,
             branch_name: None,
             summary: "Test commit".to_string(),
             body: None,

@@ -217,6 +217,8 @@ impl VcsBackend for HgBackend {
             commits.push(CommitInfo {
                 id,
                 short_id,
+                change_id: None,
+                short_change_id: None,
                 branch_name: None,
                 summary,
                 body,
@@ -345,6 +347,8 @@ impl VcsBackend for HgBackend {
                 CommitInfo {
                     id,
                     short_id,
+                    change_id: None,
+                    short_change_id: None,
                     branch_name: None,
                     summary,
                     body,

@@ -40,8 +40,13 @@ pub struct VcsInfo {
 pub struct CommitInfo {
     pub id: String,
     pub short_id: String,
+    /// Jujutsu change ID (stable across rewrites). `None` for non-jj backends.
+    pub change_id: Option<String>,
+    /// Short form of the change ID. `None` for non-jj backends.
+    pub short_change_id: Option<String>,
     /// Optional branch label for this commit in commit selection UI.
     /// For Git this is populated for commits that are branch tips.
+    /// For Jujutsu this is the first local bookmark attached to the commit.
     pub branch_name: Option<String>,
     pub summary: String,
     pub body: Option<String>,
@@ -132,6 +137,13 @@ pub trait VcsBackend: Send {
             "Staging not supported for this VCS".into(),
         ))
     }
+
+    /// Default revset to load on startup when the user does not pass `-r`.
+    /// Jujutsu returns `trunk()..@ ~ empty()` so the user lands on their
+    /// current stack. Other backends return `None`.
+    fn default_review_revset(&self) -> Option<String> {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -195,6 +207,8 @@ mod tests {
         let commit = CommitInfo {
             id: "abc123def456".to_string(),
             short_id: "abc123d".to_string(),
+            change_id: None,
+            short_change_id: None,
             branch_name: Some("main".to_string()),
             summary: "Fix bug".to_string(),
             body: None,

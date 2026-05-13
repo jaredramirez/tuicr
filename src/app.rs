@@ -3761,9 +3761,8 @@ impl App {
                         // At end edge - shrink from end
                         self.commit_selection_range = Some((start, end - 1));
                     } else {
-                        // In the middle - shrink towards cursor (exclude everything after cursor)
-                        // This makes the cursor the new end of the range
-                        self.commit_selection_range = Some((start, cursor));
+                        // In the middle - deselect cursor and everything after it
+                        self.commit_selection_range = Some((start, cursor - 1));
                     }
                 } else {
                     // Cursor is outside the range - extend to include it
